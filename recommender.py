@@ -442,72 +442,134 @@ class CollaborativeSongRecommender:
         self.needed_similar_rating = needed_similar_rating 
         
     
-    def utility_matrix(self):
+    def utility_matrix(self, scale=True):
         """
-        Explicitly creates a utility matrix 
+        Explicitly creates a Utility Matrix 
         
-        takes in a dataframe of three values, 'song', 'user' and 'count' 
+        Uses the class' scaled_taste_profile to create a Utility Matrix. Note the matrix created 
+        is not based on the user count but rather the listen count 
+        
         and then returns a matrix with every user in a row and every song in a column.
         The values of the matrix are then filled with the number of listen counts the player has 
         for each song. (This does result in a vary sparse matrix)
 
-        In this case we are going to use the word score, because we want to maintain the 
+        In this case we are going to use the scaled taste profile
+        
+        word score, because we want to maintain the 
         functionality of having access to both ratings and song counts as enjoyment idicators.
+        
+
+        
+        Paratmeters
+        -----------
+        scale: Boolean 
+                    A boolean of whether the rated or count data should be used in creating the 
+                    utility matrix
+        
+        Returns
+        -------
+        R : Pandas DataFrame
+                A Pandas DataFrame of utility matrix (passed into the self.utility matrix attribute)
         """
+        
+        assert isinstance(scale, bool), "Must pass a boolean value to \'scale\'" 
+        
+        # if scaling should not be used, use original rated data (counts)
+        if (scale == False):
+            taste_profile = self.taste_profile
+        else:
+            taste_profile = self.scaled_taste_profile
+            
         print("\nStarting Utility Matrix Formation")
+        
         # finding unique users and the number 
-        uni_users = self.scaled_taste_profile['user'].unique()
+        uni_users = taste_profile['user'].unique()
         num_users = len(uni_users)
 
         # finding unique songs and the number
-        uni_songs = self.scaled_taste_profile['song'].unique()
+        uni_songs = taste_profile['song'].unique()
         num_songs = len(uni_songs)
 
-        # Initiate numpy matrix with user and song combinations. 
+        # Initiate DataFrame null matrix with number of users and songs for dimensions
         R_numpy = data=np.full((num_users, num_songs), np.nan)
         R = pd.DataFrame(data=R_numpy, index= uni_users, columns=uni_songs)                    
 
-        for triplet in self.scaled_taste_profile.itertuples(): 
+        # iterate over taste profile to create utility matrix
+        for triplet in taste_profile.itertuples(): 
             user = triplet[1]
             song = triplet[2]
             score = triplet[3]
             R.loc[user, song] = score
 
+        # return size of created utility matrix
         print(f'Created Utility Matrix with:\n\t {num_users} Unique',
               f'Users\n\t{num_songs} Unique Songs')
 
         return R
 
+    
     def similar_users_to_user(self, curr_user = None):
         """
-        We are creating user similarity matrices, based on the user having listened to enough of the songs to 
-        consider their opinion"""
+        Finds similar users and their cosine similarity, based on overlap passed into class initialisation
         
+        Uses self.song_overlap to define a number of songs that is considered high enough for two users to be 
+        seen as similar. User combinations between the current user (who is randomised if not passed in) and 
+        others are then tested based on cosine similiarity between one or two metrics. All similiarities are
+        found based on the similarity between ratings. If a user_matrix from a singular value decomposition is
+        passed into the class initiatialisation latent feature similarity can also be calculated using 
+        cosine similarity. 
+           
+        Paratmeters
+        -----------
+        curr_user : string
+                    A unique identifier for a specific user, for whom similar users will be found
+
+        Returns
+        -------
+        user_similarity_overlap : Pandas Series
+                    A Pandas Series of users and their cosine similiarity to the current user based on the 
+                    similarity in ratings 
+                        
+        
+        user_similarity_latent : Pandas Series 
+                    A Pandas Series of users and their cosine similarity to the current user based on the 
+                    similiarity to latent features from a user matrix derived from a SVD 
+
+        Note
+        ----
+        The user matrix needed for comparing latent features can be created using an SVD in the 
+        SurpriseDecompositionRecommender class. Latent features could be calculated regardless of overlap but
+        ensuring that the overlap threshold is met allows us to be sure that only users who have behaved 
+        similarly (i.e. listened to the same songs) are compared.
+        
+         
+        See Also 
+        --------
+        SurpriseDecompositionRecommender: A Class for recommending based on a Singular Value Decomposition
+        """
+        
+        # If no user is explicitly passed, one is randomly selected  
         if (curr_user == None):
             curr_user = self.taste_profile['user'].values[random.randint(0, len(self.taste_profile['user']) - 1)]
         
-        
-        
-        # find users who have listened to the same songs (need a significant overlap, pick 5 as default)
-        # we dont want the cxosine similarity between two users who have listened to the same song once for 
-        # just that one data point. 
-
-        # find the overlap 
+       
+        # create series for overlaps 
         user_similarity_overlap = pd.Series(dtype='float64')
         user_similarity_latent = pd.Series(dtype='float64')
         
-
+        # find the current user's (to be compated to) ratings and rated columns (songs)
         curr_user_rated = ~self.utility.loc[curr_user,:].isna()
         curr_user_columns = self.utility.loc[curr_user].dropna().index.values
         
 
         # for each user (not the one we are considering)
         for other_user in self.utility.loc[self.utility.index != curr_user].index.values:
+            
             # find section of songs that both have listened to 
             both_rated = curr_user_rated & ~self.utility.loc[other_user,:].isna()
             both_rated_columns = both_rated[both_rated].index.values
             
-            # if they have both rated more than one of the same song
+            # if the overlap between what they have both rated reaches the threshold 
             if (both_rated.sum() > self.song_overlap):
 
                 # create song based similarity matrix
@@ -516,8 +578,8 @@ class CollaborativeSongRecommender:
 
                 # find the other users' ratings for the overlapping songs
                 other_user_ratings = self.utility.loc[other_user, both_rated].values.reshape(1, -1)
-
               
+                # add other user and similarity to overlap series 
                 user_similarity_overlap[other_user] = cosine_similarity(curr_user_ratings, other_user_ratings)
                 
                 # add in latent features similarity (if available)
@@ -526,46 +588,87 @@ class CollaborativeSongRecommender:
                         self.user_matrix_df.loc[curr_user].values.reshape(1,-1), 
                         self.user_matrix_df.loc[other_user].values.reshape(1, -1))
         
-        if (user_similarity_latent.sum().sum() > 0): 
-            self.user_similarity_latent = user_similarity_latent
-            
+        # return user similarities 
         return user_similarity_overlap, user_similarity_latent
 
     
     def user_rating_prediction(self, curr_user = None, song = None):
         """
-        If no ratings were able to be made, return 0 for both. (This will not be possible to get with linear
-        combinations of other users)
+        Predicts a user's rating based on weighing the predictions of other users based on their similarity
+        
+        
+        Creates a predicted rating for a song and user combination by using the similarity between users as
+        weights on the rating given by the other user. Predictions can be based on the similarity between 
+        known ratings or between latent features derived from a Singular Value Decomposition. 
+           
+        Paratmeters
+        -----------
+        curr_user : string
+                    A unique identifier for a specific user, for whom the prediction will be made
+                    
+        song : string
+                    A unique identifier for a specific song, for which the prediction will be made
+
+        Returns
+        -------
+        overlap_prediction : int
+                    The predicted rating, based on overlap similarity as ratings weights
+        
+        latent_prediction : int 
+                    The predicted rating, based on latent similiarity as ratings weights 
+
+
+        Notes
+        -----
+        Zeros are used for unsuccessful (not enough overlap) ratings because these will be unique (no 
+        other combinations will create a 0 rating). This ensures that these can be removed from reporting.
+        
+        See Also 
+        --------
+        self.similar_users_to_user : class method to calculate similarity between users 
         """
         
+        # randomise user if none is passed in 
         if (curr_user is None):
             curr_user = self.taste_profile['user'].values[random.randint(0, len(self.taste_profile['user']) - 1)]
+        else:
+            assert curr_user.isin(self.taste_profile['user'].values), "User not found, so unable to create recommendations"
             
+        # randomise song if none is passed in 
         if (song is None):
             song = self.taste_profile['song'].values[random.randint(0, len(self.taste_profile['song']) - 1)]
-        
-        
+        else:
+            assert song.isin(self.taste_profile['song'].values), "User not found, so unable to create recommendations"
+            
+        # get similarities to current user (based on the 
         similarity_overlap, similarity_latent = self.similar_users_to_user(curr_user)
         overlap_predicted = 0 
         latent_predicted = 0 
         number_similar_considered = 0
 
-        
+        # loop over other users 
         for comparable_user in similarity_overlap.index.values:
             
+            # get other user's rating
             other_rating = self.utility.loc[comparable_user, song]
 
+            # if the other user rated 
             if np.isnan(other_rating) == False:
-                number_similar_considered += 1 
                 
+                # add to number of similarly users considered tally 
+                number_similar_considered += 1 
+                # add weighted rating to running total 
                 overlap_predicted += similarity_overlap[comparable_user][0][0]*other_rating
                 
+                # if latent features are being considered add weighted latent rating to total 
                 if len(similarity_latent) > 0:
                     latent_predicted += similarity_latent[comparable_user][0][0]*other_rating
-                    
+        
+        # if none are considered return 0 (this will be an indicator of unsuccessful ratings) 
         if number_similar_considered == 0:
             return 0, 0
         
+        # Calculate the predictions by dividing total by number of predictions 
         else:
             overlap_prediction = overlap_predicted / number_similar_considered
             if latent_predicted == 0:
@@ -574,6 +677,7 @@ class CollaborativeSongRecommender:
             else:
                 latent_prediction = latent_predicted / number_similar_considered
         
+        # if latent predictions are not being considered only include the overlap predictions
         if (latent_prediction is None):
             return overlap_prediction
         
@@ -581,42 +685,75 @@ class CollaborativeSongRecommender:
             return overlap_prediction, latent_prediction
                 
            
-    def generate_taste_profile_predictions(self):
+    def generate_taste_profile_predictions(self, inclu_latent=True):
         """
-        Want to create a version of the taste profile with predictions and true values, then 
-        return the rmse """
+        Creates predictions for all values within the taste profile (to find accuracy of overall 
+        predictions) and returns a taste profile with all predictions. Can return both overlap
+        based and latent based predictions. Count data is added from the original taste profile 
+        for potential rank-based evaluations. Reports the number of combinations unable to predict
+        but includes them in taste profile (as 0 rated).
+        
+        Returns
+        -------
+        full_taste_profile : Pandas DataFrame
+                    A Pandas DataFrame with the user, song, rating and predicted rating(s) 
 
+        Notes
+        -----
+        Zeros are used for unsuccessful (not enough overlap) ratings because these will be unique (no 
+        other combinations will create a 0 rating). This ensures that these can be removed from reporting.
+        
+        See Also 
+        --------
+        self.user_rating_prediction : Creates predictions for each specific user-song combination passed in 
+        
+        """
+        if (inclu_latent):
+            assert len(self.user_matrix_df) > 0, "No user latent feature matrix passed into class intialisation" 
+
+        # creates copy of taste profile to add to 
         tp_comparison = self.scaled_taste_profile.copy()
+        
+        # create matrix for user-song data
         rating_predictions = []
+        
+        # create array for only latent predictions
         latent_predictions = []
 
-        latent_avail = (len(self.user_matrix_df) > 0)
+        # create an integer counter for songs unable to predict (no enough overlap users)
         unable = 0 
         
+        # iterate over taste profile rows to create new predictions
         for triplet in tp_comparison.itertuples(): 
             user = triplet[1]
             song = triplet[2]
             scaled_score = triplet[3]
             count = self.taste_profile[(self.taste_profile['user'] == user) &
                     (self.taste_profile['song'] == song)]['count'].values[0]
-
+            
+            # get rating for specific user-song combination
             overlap, latent = self.user_rating_prediction(curr_user=user, song=song)
             
-            if overlap == 0:
+            # add to counter if unable to prediction
+            if (overlap == 0):
                 unable += 1
             
+            # add current row to the matrix 
             rating_predictions.append([user, song, count, scaled_score, overlap])
             
-            if latent_avail:
+            if (inclu_latent):
                 latent_predictions.append(latent)
             
+        # create dataframe of user-song combinations and count, rating and prediction
         full_taste_profile = pd.DataFrame(columns=['user', 'song', 'count', 'scaled_score', 'overlap_prediction'],
                                          data = rating_predictions)
 
-        if len(latent_predictions) > 0:
+        # add latent predictions if they are to be included
+        if (inclu_latent):
             full_taste_profile['latent_predictions'] = latent_predictions
         
-        print("Unable to predict ratings for:", unable, "songs")
+        # report the number of user-song combinations unable to predict
+        print("Unable to predict ratings for:", unable, "user-song combinations")
         
         return full_taste_profile
 
@@ -624,22 +761,55 @@ class CollaborativeSongRecommender:
     def recommend_user(self, rec_user=None, number_recs=9,
                               similarity_type='overlap'):
         """
-        Uses"""
+        Recommends songs to a specific user based on a passed in similarity metric.
         
+        Generates predicted song ratings from the songs that enough similar users have listened to. 
+        Only songs that have been listened to by the similar users are considered for recommendation.
+        Similarity type can be 'overlap' or 'latent'. 
+        
+        Parameters
+        ----------
+        rec_user : string
+                    A unique identifier for the user to recommend songs to 
+                    
+        number_recs : int
+                    The number of recommendations to return to the user
+
+        
+        Returns
+        -------
+        recs : Pandas DataFrame
+                    A Pandas DataFrame with the user, song, rating and predicted rating(s) 
+
+        See Also 
+        --------
+        self.similar_users_to_user : Finds similar enough users and reports the cosine similarity 
+        
+        """
+        
+        # if using latent features, assert that they were passed into the class initialisation
+        if (similarity_type=='latent'):
+            assert len(self.user_matrix_df) > 0, "No user latent feature matrix passed into class intialisation" 
+
+        # randomise user if none is passed in 
         if (rec_user is None):
             rec_user = self.taste_profile['user'].values[random.randint(0, len(self.taste_profile['user']) - 1)]
-        sim_matrix_overlap, sim_matrix_latent = self.similar_users_to_user(rec_user)
+        else:
+            assert rec_user.isin(self.taste_profile['user'].values), "User not found, so unable to create recommendations"
         
-        if similarity_type == 'overlap':
-            sim_matrix = sim_matrix_overlap
-        elif (similarity_type == 'latent') & (len(sim_matrix_latent) > 0):
-            sim_matrix = sim_matrix_latent
-            
+        # create user similarity series for the user to be recommended to 
+        sim_series_overlap, sim_series_latent = self.similar_users_to_user(rec_user)
+        
+        # select series to use based on the similarity type 
+        if (similarity_type == 'overlap'):
+            sim_series = sim_series_overlap
+        elif (similarity_type == 'latent') & (len(sim_series_latent) > 0):
+            sim_series = sim_series_latent
         else:
             return "Incorrect similarity type or no latent user features passed in class initiation"
             
-            
-        similar_enough = sim_matrix.index.values
+        # create array of similar users to consider and dataframe of songs     
+        similar_enough = sim_series.index.values
         similar_user_songs = self.scaled_taste_profile[self.scaled_taste_profile['user'].isin(similar_enough)]
 
         song_reccs = pd.Series(dtype=float)
@@ -652,13 +822,12 @@ class CollaborativeSongRecommender:
             # We don't want to be subject to the bias of one user?
             if (len(song_rated) > self.needed_similar_rating):
                 for user in song_rated['user']:
-                    song_score += sim_matrix[user]*song_rated[song_rated['user'] == user]['rating'].values[0]
+                    song_score += sim_series[user]*song_rated[song_rated['user'] == user]['rating'].values[0]
             
                 song_reccs[song] = song_score /len(song_rated)
-        
+
+        # get songs ids with the highest similiarity values 
         recs = song_reccs.sort_values(ascending=False).head(number_recs).index.values
-        
-        print(rec_user)
         
         return self.song_info.loc[recs]
     
@@ -721,14 +890,38 @@ class SurpriseDecompositionRecommender:
         
         # readying data for a surprise utility matrix 
         self.Dataset_taste_profile = Dataset.load_from_df(self.scaled_taste_profile, reader = Reader(rating_scale=(1, 5)))
-        #self.train_Trainset, self.test_Testset = train_test_splitSurprise(self.Dataset_taste_profile, test_size=0.25, random_state=11)
-
+        
         # creating utility matrices for our training set and testing set
         self.utility = self.Dataset_taste_profile.build_full_trainset()
         
         
     def funk_decompose_search(self, param_grid, measures_=['rmse']):
-        """Takes in GridSearchParameters in a parameter to find the best possible """
+        """
+        Recommends songs to a specific user based on a passed in similarity metric.
+        
+        Generates predicted song ratings from the songs that enough similar users have listened to. 
+        Only songs that have been listened to by the similar users are considered for recommendation.
+        Similarity type can be 'overlap' or 'latent'. 
+        
+        Parameters
+        ----------
+        rec_user : string
+                    A unique identifier for the user to recommend songs to 
+                    
+        number_recs : int
+                    The number of recommendations to return to the user
+
+        
+        Returns
+        -------
+        recs : Pandas DataFrame
+                    A Pandas DataFrame with the user, song, rating and predicted rating(s) 
+
+        See Also 
+        --------
+        self.similar_users_to_user : Finds similar enough users and reports the cosine similarity 
+        
+        """
         
         # from tempfile import mkdtemp
         # cachedir = mkdtemp() # stores the data for the cross validations in harddrive (slower) but not using RAM so heavily
@@ -747,7 +940,32 @@ class SurpriseDecompositionRecommender:
 
 
     def funk_model(self):
+        """
+        Recommends songs to a specific user based on a passed in similarity metric.
         
+        Generates predicted song ratings from the songs that enough similar users have listened to. 
+        Only songs that have been listened to by the similar users are considered for recommendation.
+        Similarity type can be 'overlap' or 'latent'. 
+        
+        Parameters
+        ----------
+        rec_user : string
+                    A unique identifier for the user to recommend songs to 
+                    
+        number_recs : int
+                    The number of recommendations to return to the user
+
+        
+        Returns
+        -------
+        recs : Pandas DataFrame
+                    A Pandas DataFrame with the user, song, rating and predicted rating(s) 
+
+        See Also 
+        --------
+        self.similar_users_to_user : Finds similar enough users and reports the cosine similarity 
+        
+        """
         funk = FunkSVD(n_factors = self.best_params['n_factors'], # number of 
                        n_epochs=self.best_params['n_epochs'], 
                        lr_all=self.best_params['lr_all'],    # Learning rate 
@@ -781,10 +999,34 @@ class SurpriseDecompositionRecommender:
 
     def generate_taste_profile_predictions(self):
         """
-        Want to create a version of the taste profile with predictions and true values, then 
-        return the rmse """
+        Recommends songs to a specific user based on a passed in similarity metric.
+        
+        Generates predicted song ratings from the songs that enough similar users have listened to. 
+        Only songs that have been listened to by the similar users are considered for recommendation.
+        Similarity type can be 'overlap' or 'latent'. 
+        
+        Parameters
+        ----------
+        rec_user : string
+                    A unique identifier for the user to recommend songs to 
+                    
+        number_recs : int
+                    The number of recommendations to return to the user
+
+        
+        Returns
+        -------
+        recs : Pandas DataFrame
+                    A Pandas DataFrame with the user, song, rating and predicted rating(s) 
+
+        See Also 
+        --------
+        self.similar_users_to_user : Finds similar enough users and reports the cosine similarity 
+        
+        """
         
         tp_comparison = self.scaled_taste_profile.copy()
+        
         rating_predictions = []
 
         for triplet in tp_comparison.itertuples(): 
@@ -803,24 +1045,75 @@ class SurpriseDecompositionRecommender:
         return full_taste_profile
         
     
-    def single_song_latent_feature_graph(self, song_nam=None):
+    def single_song_latent_feature_graph(self, song_name=None):
+        """
+        Recommends songs to a specific user based on a passed in similarity metric.
         
-        if (song_nam is None):
+        Generates predicted song ratings from the songs that enough similar users have listened to. 
+        Only songs that have been listened to by the similar users are considered for recommendation.
+        Similarity type can be 'overlap' or 'latent'. 
+        
+        Parameters
+        ----------
+        rec_user : string
+                    A unique identifier for the user to recommend songs to 
+                    
+        number_recs : int
+                    The number of recommendations to return to the user
+
+        
+        Returns
+        -------
+        recs : Pandas DataFrame
+                    A Pandas DataFrame with the user, song, rating and predicted rating(s) 
+
+        See Also 
+        --------
+        self.similar_users_to_user : Finds similar enough users and reports the cosine similarity 
+        
+        """
+        
+        if (song_name is None):
             song_name = self.taste_profile['song'].values[random.randint(0, len(self.taste_profile['song']) - 1)]
         
         song_latent_feats = self.song_matrix_df.loc[:,song_name]
         
-        plt.figure(figsize=(15, 7))
-        plt.barh([f'Latent {i}' for i in song_latent_feats.index], song_latent_feats)
-        plt.title("Latent Variable Composition of Song:" + song_name)
-        plt.ylabel("Latent Variable")
+        plt.figure(figsize=(12, 4))
+        plt.barh([f'{i}' for i in song_latent_feats.index], song_latent_feats)
+        plt.title("Hidden Feature Composition of " + self.song_info.loc[song_name]['Title'], fontsize=20)
+        plt.ylabel("Hidden Feature")
         plt.xlabel("Value")
+        plt.yticks(ticks=None, labels=None)
         plt.show()
 
     
     def recommend_user(self, rec_user_id=None):
         """
-        Takes in a user and returns the """
+        Recommends songs to a specific user based on a passed in similarity metric.
+        
+        Generates predicted song ratings from the songs that enough similar users have listened to. 
+        Only songs that have been listened to by the similar users are considered for recommendation.
+        Similarity type can be 'overlap' or 'latent'. 
+        
+        Parameters
+        ----------
+        rec_user : string
+                    A unique identifier for the user to recommend songs to 
+                    
+        number_recs : int
+                    The number of recommendations to return to the user
+
+        
+        Returns
+        -------
+        recs : Pandas DataFrame
+                    A Pandas DataFrame with the user, song, rating and predicted rating(s) 
+
+        See Also 
+        --------
+        self.similar_users_to_user : Finds similar enough users and reports the cosine similarity 
+        
+        """
             
         if (rec_user_id is None):
             rec_user_id = self.taste_profile['user'].values[random.randint(0, len(self.taste_profile['user']) - 1)]
@@ -835,7 +1128,30 @@ class SurpriseDecompositionRecommender:
         
     def recommend_all_users(self):
         """
-        Creates a dataframe that has a list of ten song recommendations for all users 
+        Recommends songs to a specific user based on a passed in similarity metric.
+        
+        Generates predicted song ratings from the songs that enough similar users have listened to. 
+        Only songs that have been listened to by the similar users are considered for recommendation.
+        Similarity type can be 'overlap' or 'latent'. 
+        
+        Parameters
+        ----------
+        rec_user : string
+                    A unique identifier for the user to recommend songs to 
+                    
+        number_recs : int
+                    The number of recommendations to return to the user
+
+        
+        Returns
+        -------
+        recs : Pandas DataFrame
+                    A Pandas DataFrame with the user, song, rating and predicted rating(s) 
+
+        See Also 
+        --------
+        self.similar_users_to_user : Finds similar enough users and reports the cosine similarity 
+        
         """
         
         unique_users = self.taste_profile['user'].unique()
