@@ -1,7 +1,7 @@
 Pippi de Bree \
 pippidebree@gmail.com
 
-Exploring Recommendation System Suitability By User History Depth  
+# Exploring Recommendation System Suitability By User History Depth  
 
 Documents in this project folder include:
 
@@ -30,6 +30,5 @@ A majority of the data is too large to fit here reasonably so can be found in [t
 
 
 Data Sources:
-[Lakh MIDI Matched Dataset](https://colinraffel.com/projects/lmd/)
-[Echo Nest Taste Profile](http://millionsongdataset.com/tasteprofile/)
-
+- [Lakh MIDI Matched Dataset](https://colinraffel.com/projects/lmd/)
+- [Echo Nest Taste Profile](http://millionsongdataset.com/tasteprofile/)
